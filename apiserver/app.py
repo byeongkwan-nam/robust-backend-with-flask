@@ -1,93 +1,199 @@
-from flask import Flask, jsonify, request
+import jwt
+import bcrypt
+
+from flask import Flask, jsonify, request, current_app, g
 from files.encoder import CustomJSONEncoder
+from files.auth_decorator import login_required
+from sqlalchemy import create_engine, text
+from datetime   import datetime, timedelta
 
-app = Flask(__name__) # 임포트한 Flask 클래스를 객체화 (instantiate)
-app.users = {}
-app.tweets = []
-app.follows = {}
-app.id_count = 1
-app.json_encoder = CustomJSONEncoder
+def get_user(user_id):
+    user = current_app.database.execute(text("""
+        SELECT 
+            id,
+            name,
+            email,
+            profile
+        FROM users
+        WHERE id = :user_id
+    """), {
+        'user_id' : user_id 
+    }).fetchone()
+
+    return {
+        'id'      : user['id'],
+        'name'    : user['name'],
+        'email'   : user['email'],
+        'profile' : user['profile']
+    } if user else None
+
+def insert_user(user):
+    return current_app.database.execute(text("""
+        INSERT INTO users (
+            name,
+            email,
+            profile,
+            hashed_password
+        ) VALUES (
+            :name,
+            :email,
+            :profile,
+            :password
+        )
+    """), user).lastrowid
+
+def insert_tweet(user_tweet):
+    return current_app.database.execute(text("""
+        INSERT INTO tweets (
+            user_id,
+            tweet
+        ) VALUES (
+            :id,
+            :tweet
+        )
+    """), user_tweet).rowcount
+
+def insert_follow(user_follow):
+    return current_app.database.execute(text("""
+        INSERT INTO users_follow_list (
+            user_id,
+            follow_user_id
+        ) VALUES (
+            :id,
+            :follow
+        )
+    """), user_follow).rowcount
+
+def insert_unfollow(user_unfollow):
+    return current_app.database.execute(text("""
+        DELETE FROM users_follow_list
+        WHERE user_id = :id
+        AND follow_user_id = :unfollow
+    """), user_unfollow).rowcount
+
+def get_timeline(user_id):
+    timeline = current_app.database.execute(text("""
+        SELECT 
+            t.user_id,
+            t.tweet
+        FROM tweets t
+        LEFT JOIN users_follow_list ufl ON ufl.user_id = :user_id
+        WHERE t.user_id = :user_id 
+        OR t.user_id = ufl.follow_user_id
+    """), {
+        'user_id' : user_id 
+    }).fetchall()
+
+    return [{
+        'user_id' : tweet['user_id'],
+        'tweet'   : tweet['tweet']
+    } for tweet in timeline]
+
+def get_user_id_and_password(email):
+    row = current_app.database.execute(text("""    
+        SELECT
+            id,
+            hashed_password
+        FROM users
+        WHERE email = :email
+    """), {'email' : email}).fetchone()
+
+    return {
+        'id'              : row['id'],
+        'hashed_password' : row['hashed_password']
+    } if row else None
 
 
-@app.route("/ping", methods=["GET"])
-def ping():
-    return "pong"
+def create_app(test_config = None):
+    app = Flask(__name__)
 
-@app.route("/sign-up", methods=["POST"])
-def sign_up():
-    new_user = request.json
-    new_user["id"] = app.id_count
-    app.users[app.id_count] = new_user
-    app.id_count += 1
-    return jsonify(new_user)
+    app.json_encoder = CustomJSONEncoder
 
+    if test_config is None:
+        app.config.from_pyfile("files/config.py")
+    else:
+        app.config.update(test_config)
 
-@app.route("/tweet", methods=["POST"])
-def tweet():
-    payload = request.json
-    user_id = int(payload['id'])
-    tweet = payload['tweet']
+    database     = create_engine(app.config['DB_URL'], encoding = 'utf-8', max_overflow = 0)
+    app.database = database
 
-    if user_id not in app.users:
-        return '사용자가 존재하지 않습니다', 400
-    
-    if len(tweet) > 300:
-        return '300자를 초과하였습니다.', 400
+    @app.route("/ping", methods=['GET'])
+    def ping():
+        return "pong"
 
-    tweet = {
-        'user_id': user_id,
-        'tweet': tweet
-    }
-    app.tweets.append(tweet)
+    @app.route("/sign-up", methods=['POST'])
+    def sign_up():
+        new_user    = request.json
+        new_user['password'] = bcrypt.hashpw(
+            new_user['password'].encode('UTF-8'),
+            bcrypt.gensalt()
+        )
 
-    return '', 200
+        new_user_id = insert_user(new_user)
+        new_user    = get_user(new_user_id)
 
+        return jsonify(new_user)
+        
+    @app.route('/login', methods=['POST'])
+    def login():
+        credential      = request.json
+        email           = credential['email']
+        password        = credential['password']
+        user_credential = get_user_id_and_password(email)
 
-@app.route('/follow', methods=["POST"])
-def follow():
-    payload = request.json
-    user_id = int(payload['id'])
-    user_id_to_follow = int(payload['follow'])
+        if user_credential and bcrypt.checkpw(password.encode('UTF-8'), user_credential['hashed_password'].encode('UTF-8')): 
+            user_id = user_credential['id'] 
+            payload = {     
+                'user_id' : user_id,
+                'exp'     : datetime.utcnow() + timedelta(seconds = 60 * 60 * 24)
+            }
+            token = jwt.encode(payload, app.config['JWT_SECRET_KEY'], 'HS256') 
 
-    if user_id not in app.users or user_id_to_follow not in app.users:
-        return "사용자가 존재하지 않습니다.", 400
-    
-    user = app.users[user_id]
-    user.setdefault('follow', set()).add(user_id_to_follow)
-    return jsonify(user)
+            return jsonify({        
+                'access_token' : token.decode('UTF-8')
+            })
+        else:
+            return '', 401
 
+    @app.route('/tweet', methods=['POST'])
+    @login_required
+    def tweet():
+        user_tweet       = request.json
+        user_tweet['id'] = g.user_id
+        tweet            = user_tweet['tweet']
 
-@app.route('/unfollow', methods=["POST"])
-def unfollow():
-    payload = request.json
-    user_id = int(payload['id'])
-    user_id_to_unfollow = int(payload['unfollow'])
+        if len(tweet) > 300:
+            return '300자를 초과했습니다', 400
 
-    if user_id not in app.users or user_id_to_unfollow not in app.users:
-        return "사용자가 존재하지 않습니다.", 400
+        insert_tweet(user_tweet)
 
-    user = app.users[user_id]
-    user.setdefault('follow', set()).discard(user_id_to_unfollow)
-    return jsonify(user)
+        return '', 200
 
+    @app.route('/follow', methods=['POST'])
+    @login_required
+    def follow():
+        payload       = request.json
+        payload['id'] = g.user_id
 
-@app.route('/timeline/<int:user_id>', methods=["GET"])
-def timeline(user_id):
-    if user_id not in app.users:
-        return "사용자가 존재하지 않습니다", 400
+        insert_follow(payload) 
 
-    follow_list = app.users[user_id].get('follow', set())
-    follow_list.add(user_id)
+        return '', 200
 
-    timelines = [tweet for tweet in app.tweets if tweet['user_id'] in follow_list]
+    @app.route('/unfollow', methods=['POST'])
+    @login_required
+    def unfollow():
+        payload       = request.json
+        payload['id'] = g.user_id
 
-    return jsonify({
-        'id': user_id,
-        'timeline': timelines
-    })
+        insert_unfollow(payload)
 
+        return '', 200
 
+    @app.route('/timeline/<int:user_id>', methods=['GET'])
+    def timeline(user_id):
+        return jsonify({
+            'user_id'  : user_id,
+            'timeline' : get_timeline(user_id)
+        })
 
-
-    
-    
+    return app
