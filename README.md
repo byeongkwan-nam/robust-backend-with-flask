@@ -15,6 +15,10 @@
 3. 자료형에 대한 이해
 * 딕셔너리: setdefault, get
 * set: 거의 안써서 잊고 살았는데, 중복을 없애기에 더없이 좋은 도구!
+4. JWT
+* header, payload, signature, and secret_key
+5. Decoration
+
 
 ### Reference
 [깔끔한 파이썬 탄탄한 백엔드, 송은우 저](https://kyobobook.co.kr/product/detailViewKor.laf?mallGb=KOR&ejkGb=KOR&barcode=9791186697757&orderClick=JAj)
