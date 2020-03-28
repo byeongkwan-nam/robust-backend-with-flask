@@ -15,8 +15,14 @@
 3. 자료형에 대한 이해
 * 딕셔너리: setdefault, get
 * set: 거의 안써서 잊고 살았는데, 중복을 없애기에 더없이 좋은 도구!
-4. JWT
-* header, payload, signature, and secret_key
+4. 인증
+* hashlib
+    * Rainbow Attack: memoization으로 풀 수 있다.
+* bcrypt
+    * salting: 비밀번호에 랜덤 값 더하기 -> 레인보우 어택 무력화.
+    * 키 스트레칭: MD5 기준 연산 5억 번 -> 5번
+* JWT
+    * header, payload, signature, and secret_key
 5. Decoration
 
 

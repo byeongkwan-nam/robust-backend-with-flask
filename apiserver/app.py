@@ -124,10 +124,7 @@ def create_app(test_config = None):
     @app.route("/sign-up", methods=['POST'])
     def sign_up():
         new_user    = request.json
-        new_user['password'] = bcrypt.hashpw(
-            new_user['password'].encode('UTF-8'),
-            bcrypt.gensalt()
-        )
+        new_user['password'] = bcrypt.hashpw(new_user['password'].encode('UTF-8'), bcrypt.gensalt())
 
         new_user_id = insert_user(new_user)
         new_user    = get_user(new_user_id)
